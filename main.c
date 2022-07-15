@@ -5,6 +5,11 @@
 #include <time.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/time.h>
+
+#include <X11/X.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
 
 
 int main() {
@@ -19,7 +24,7 @@ int main() {
 
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(8000);
-    server_addr.sin_addr.s_addr = inet_addr("10.1.0.198");
+    server_addr.sin_addr.s_addr = inet_addr("10.1.0.234");
     //server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
 
@@ -37,50 +42,87 @@ int main() {
 
     printf("%s", bu);
 
+    char frame_buffer[1000][17] = {};
+
     char frame[] = {
-        0b10000010, 0b10001011,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-        255, 0, 0
-    };
+            0b10000010, 0b10001011,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            255, 0, 0
+        };
+
+    for (int index = 0; index < 1000; index++) {
+        memcpy(frame_buffer[index], frame, 17);
+    }
 
     srand(time(NULL));
 
-    //while (true) {
+    Display *display = XOpenDisplay(NULL);
+    Window root = DefaultRootWindow(display);
+    XImage *image = XGetImage(display, root, 1920, 0, 400, 300, AllPlanes, ZPixmap);
 
-    uint32_t i = 100;
-    uint32_t j = 100;
-    uint8_t r = rand();
-    uint8_t g = rand();
-    uint8_t b = rand();
+    unsigned long screen[400][300] = {};
 
-    printf("%d %d %d\n", r, g, b);
+    while (1) {
+        usleep(100000);
 
-    //uint8_t buffer[11] = {0, 0, 0, 0, 0, 0, 0, 0, r, g, b};
+        struct timeval stop, start;
+        gettimeofday(&start, NULL);
 
-    for (i = 0; i < 400; i++) {
-        for (j = 0; j < 300; j++) {
-            //sleep(1);
-            frame[0+2+4] = (i & 0xff000000) >> 24;
-            frame[1+2+4] = (i & 0x00ff0000) >> 16;
-            frame[2+2+4] = (i & 0x0000ff00) >> 8;
-            frame[3+2+4] = (i & 0x000000ff);
-            frame[4+2+4] = (j & 0xff000000) >> 24;
-            frame[5+2+4] = (j & 0x00ff0000) >> 16;
-            frame[6+2+4] = (j & 0x0000ff00) >> 8;
-            frame[7+2+4] = (j & 0x000000ff);
-            //printf("%d %d %d %d %d\n", i, j, r, g, b);
+        image = XGetSubImage(display, root, 1920, 0, 400, 300, AllPlanes, ZPixmap, image, 0, 0);
 
-            for (int n = 0; n<1000; n++) {
-                bu[n] = 0;
+        gettimeofday(&stop, NULL);
+        printf("snapping took %f s\n", ((stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec) / 1000000.0);
+
+        int frame_index = 0;
+
+        gettimeofday(&start, NULL);
+        for (int i = 0; i < 400; i++) {
+
+            unsigned long *buff = screen[i];
+
+            for (int j = 0; j < 300; j++) {
+
+                unsigned long pixel = XGetPixel(image, i, j);
+
+                if (buff[j] != pixel) {
+                    buff[j] = pixel;
+
+                    if (frame_index == 1000) {
+                        write(conn, frame_buffer, 17*1000);
+                        frame_index = 0;
+                    }
+
+                    //printf("%d\n", frame_index);
+
+                    char *f = frame_buffer[frame_index];
+
+                    f[0+2+4] = (i & 0xff000000) >> 24;
+                    f[1+2+4] = (i & 0x00ff0000) >> 16;
+                    f[2+2+4] = (i & 0x0000ff00) >> 8;
+                    f[3+2+4] = (i & 0x000000ff);
+
+                    f[4+2+4] = (j & 0xff000000) >> 24;
+                    f[5+2+4] = (j & 0x00ff0000) >> 16;
+                    f[6+2+4] = (j & 0x0000ff00) >> 8;
+                    f[7+2+4] = (j & 0x000000ff);
+
+                    f[14] = (pixel >> 16) & 0xFF;
+                    f[15] = (pixel >> 8) & 0xFF;
+                    f[16] = (pixel) & 0xFF;
+
+                    frame_index++;
+
+                    //write(conn, f, 17);
+                }
             }
-
-            //recv(conn, &bu, 1000, MSG_DONTWAIT);
-            //printf("%s", bu);
-
-            write(conn, frame, 17);
         }
+        if (frame_index != 0) {
+            write(conn, frame_buffer, 17*frame_index);
+        }
+        gettimeofday(&stop, NULL);
+        printf("printing took %f s\n", ((stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec) / 1000000.0);
     }
 
     sleep(1);
