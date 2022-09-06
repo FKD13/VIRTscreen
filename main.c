@@ -1,160 +1,116 @@
-#include <sys/socket.h>
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <arpa/inet.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
-#include <string.h>
-#include <sys/time.h>
 
 #include <X11/X.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 
+#define SCREEN_WIDTH 800
+#define SCREEN_HEIGHT 600
 
 int main() {
 
-    int conn = socket(AF_INET, SOCK_STREAM, 0);
-    if (conn == 0) {
-        printf("Failed to create socket\n");
-        exit(EXIT_FAILURE);
-    }
+  int conn = socket(AF_INET, SOCK_STREAM, 0);
+  if (conn == 0) {
+    printf("Failed to create socket\n");
+    exit(EXIT_FAILURE);
+  }
 
-    struct sockaddr_in server_addr;
+  struct sockaddr_in server_addr;
 
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(8000);
-    server_addr.sin_addr.s_addr = inet_addr("10.1.0.234");
-    //server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons(8000);
+  server_addr.sin_addr.s_addr = inet_addr("10.1.0.234");
+  // server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
+  if (connect(conn, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+    printf("Failed to connect socket\n");
+    exit(EXIT_FAILURE);
+  }
 
-    if (connect(conn, (struct sockaddr*) &server_addr, sizeof(server_addr)) < 0) {
-        printf("Failed to connect socket\n");
-        exit(EXIT_FAILURE);
-    }
+  char frame_buffer[1000][7] = {};
 
-    char *headers = "GET /set_pixel HTTP/1.1\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\nSec-WebSocket-Protocol: chat\nSec-WebSocket-Version: 13\n\n";
+  char frame[] = {0, 0, 0, 0, 255, 0, 0};
 
-    send(conn, headers, strlen(headers), 0);
+  for (int index = 0; index < 1000; index++) {
+    memcpy(frame_buffer[index], frame, 7);
+  }
 
-    char bu[1000];
-    recv(conn, &bu, 1000, 0);
+  srand(time(NULL));
 
-    printf("%s", bu);
+  Display *display = XOpenDisplay(NULL);
+  Window root = DefaultRootWindow(display);
+  XImage *image = XGetImage(display, root, 1920, 0, SCREEN_WIDTH, SCREEN_HEIGHT,
+                            AllPlanes, ZPixmap);
 
-    char frame_buffer[1000][17] = {};
+  unsigned long screen[SCREEN_WIDTH][SCREEN_HEIGHT] = {};
 
-    char frame[] = {
-            0b10000010, 0b10001011,
-            0, 0, 0, 0,
-            0, 0, 0, 0,
-            0, 0, 0, 0,
-            255, 0, 0
-        };
+  while (1) {
+    // usleep(75000);
+    // usleep(50000);
 
-    for (int index = 0; index < 1000; index++) {
-        memcpy(frame_buffer[index], frame, 17);
-    }
+    struct timeval stop, start;
+    gettimeofday(&start, NULL);
 
-    srand(time(NULL));
+    image = XGetSubImage(display, root, 1920, 0, SCREEN_WIDTH, SCREEN_HEIGHT,
+                         AllPlanes, ZPixmap, image, 0, 0);
 
-    Display *display = XOpenDisplay(NULL);
-    Window root = DefaultRootWindow(display);
-    XImage *image = XGetImage(display, root, 1920, 0, 400, 300, AllPlanes, ZPixmap);
+    gettimeofday(&stop, NULL);
+    printf("snapping took %f s\n", ((stop.tv_sec - start.tv_sec) * 1000000 +
+                                    stop.tv_usec - start.tv_usec) /
+                                       1000000.0);
 
-    unsigned long screen[400][300] = {};
+    int frame_index = 0;
 
-    while (1) {
-        usleep(100000);
+    gettimeofday(&start, NULL);
+    for (int i = 0; i < SCREEN_WIDTH; i++) {
 
-        struct timeval stop, start;
-        gettimeofday(&start, NULL);
+      unsigned long *buff = screen[i];
 
-        image = XGetSubImage(display, root, 1920, 0, 400, 300, AllPlanes, ZPixmap, image, 0, 0);
+      for (int j = 0; j < SCREEN_HEIGHT; j++) {
 
-        gettimeofday(&stop, NULL);
-        printf("snapping took %f s\n", ((stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec) / 1000000.0);
+        unsigned long pixel = XGetPixel(image, i, j);
 
-        int frame_index = 0;
+        if (buff[j] != pixel) {
+          buff[j] = pixel;
 
-        gettimeofday(&start, NULL);
-        for (int i = 0; i < 400; i++) {
+          if (frame_index == 1000) {
+            write(conn, frame_buffer, 7 * 1000);
+            frame_index = 0;
+          }
 
-            unsigned long *buff = screen[i];
+          char *f = frame_buffer[frame_index];
 
-            for (int j = 0; j < 300; j++) {
+          f[0] = (i & 0x0000ff00) >> 8;
+          f[1] = (i & 0x000000ff);
 
-                unsigned long pixel = XGetPixel(image, i, j);
+          f[2] = (j & 0x0000ff00) >> 8;
+          f[3] = (j & 0x000000ff);
 
-                if (buff[j] != pixel) {
-                    buff[j] = pixel;
+          f[4] = (pixel >> 16) & 0xFF;
+          f[5] = (pixel >> 8) & 0xFF;
+          f[6] = (pixel)&0xFF;
 
-                    if (frame_index == 1000) {
-                        write(conn, frame_buffer, 17*1000);
-                        frame_index = 0;
-                    }
-
-                    //printf("%d\n", frame_index);
-
-                    char *f = frame_buffer[frame_index];
-
-                    f[0+2+4] = (i & 0xff000000) >> 24;
-                    f[1+2+4] = (i & 0x00ff0000) >> 16;
-                    f[2+2+4] = (i & 0x0000ff00) >> 8;
-                    f[3+2+4] = (i & 0x000000ff);
-
-                    f[4+2+4] = (j & 0xff000000) >> 24;
-                    f[5+2+4] = (j & 0x00ff0000) >> 16;
-                    f[6+2+4] = (j & 0x0000ff00) >> 8;
-                    f[7+2+4] = (j & 0x000000ff);
-
-                    f[14] = (pixel >> 16) & 0xFF;
-                    f[15] = (pixel >> 8) & 0xFF;
-                    f[16] = (pixel) & 0xFF;
-
-                    frame_index++;
-
-                    //write(conn, f, 17);
-                }
-            }
+          frame_index++;
         }
-        if (frame_index != 0) {
-            write(conn, frame_buffer, 17*frame_index);
-        }
-        gettimeofday(&stop, NULL);
-        printf("printing took %f s\n", ((stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec) / 1000000.0);
+      }
     }
+    if (frame_index != 0) {
+      write(conn, frame_buffer, 7 * frame_index);
+    }
+    gettimeofday(&stop, NULL);
+    printf("printing took %f s\n", ((stop.tv_sec - start.tv_sec) * 1000000 +
+                                    stop.tv_usec - start.tv_usec) /
+                                       1000000.0);
+  }
 
-    sleep(1);
-    close(conn);
-    return 0;
+  sleep(1);
+  close(conn);
+  return 0;
 }
-
-/*
-GET /set_pixel HTTP/1.1
-Host: server.example.com
-Upgrade: websocket
-Connection: Upgrade
-Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==
-Sec-WebSocket-Protocol: chat, superchat
-Sec-WebSocket-Version: 13
-Origin: http://example.com
-*/
-
-/*
-GET /set_pixel HTTP/1.1
-Upgrade: websocket
-Connection: Upgrade
-Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==
-Sec-WebSocket-Protocol: chat, superchat
-Sec-WebSocket-Version: 13
-*/
-
-/*
-GET /set_pixel HTTP/1.1
-Upgrade: websocket
-Connection: Upgrade
-Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==
-Sec-WebSocket-Protocol: chat
-Sec-WebSocket-Version: 13
-*/
